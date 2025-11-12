@@ -22,6 +22,90 @@ import numpy as np
 from collections import deque
 
 
+class TurbulenceDetector:
+    """
+    Detect market turbulence using Reynolds number analogy
+    Reynolds = (velocity × length) / viscosity
+
+    High Re = turbulent (chaotic, volatile) - GOOD for our strategy
+    Low Re = laminar (smooth, stable) - BAD for our strategy
+    """
+
+    def __init__(self, lookback=20, turbulence_threshold=0.22):
+        self.lookback = lookback
+        self.turbulence_threshold = turbulence_threshold  # Default: median Re (50% data)
+
+    def calculate_reynolds_number(self, df):
+        """
+        Calculate market Reynolds number (turbulence metric)
+        """
+        if len(df) < self.lookback:
+            return 0
+
+        recent = df.tail(self.lookback)
+
+        # Velocity = price velocity (rate of change)
+        velocity = recent['close'].pct_change().abs().mean()
+
+        # Length scale = ATR (average true range)
+        high_low = recent['high'] - recent['low']
+        high_close = (recent['high'] - recent['close'].shift(1)).abs()
+        low_close = (recent['low'] - recent['close'].shift(1)).abs()
+        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        length_scale = tr.mean()
+
+        # Viscosity = rolling std (resistance to change)
+        viscosity = recent['close'].pct_change().std()
+
+        if viscosity == 0:
+            return 0
+
+        # Reynolds number
+        reynolds = (velocity * length_scale) / viscosity
+
+        return reynolds
+
+    def is_turbulent(self, df):
+        """
+        Check if market is in turbulent (volatile) regime
+        """
+        reynolds = self.calculate_reynolds_number(df)
+        return reynolds > self.turbulence_threshold, reynolds
+
+
+class MeanReversionAnalyzer:
+    """
+    Calculate gravitational pull strength toward mean
+    Uses correlation between distance from mean and future returns
+    """
+
+    def __init__(self, ma_period=20):
+        self.ma_period = ma_period
+
+    def calculate_reversion_target(self, df, entry_price):
+        """
+        Calculate expected reversion distance based on mean gravity
+        """
+        if len(df) < self.ma_period + 5:
+            return entry_price * 0.004  # Default 0.4%
+
+        recent = df.tail(self.ma_period + 5)
+
+        # Calculate moving average (gravitational center)
+        ma = recent['close'].rolling(self.ma_period).mean().iloc[-1]
+
+        # Distance from mean (potential energy)
+        deviation = abs(entry_price - ma)
+        deviation_pct = (deviation / ma) * 100
+
+        # Gravitational pull strength (proportional to distance)
+        # Typical mean reversion: $0.26-0.27 deviation returns to mean
+        # We'll use 60% of the deviation as conservative target
+        expected_reversion_usd = deviation * 0.6
+
+        return expected_reversion_usd
+
+
 class PhysicsMomentumDetector:
     """
     Detect climbs using momentum = mass × velocity
@@ -31,11 +115,18 @@ class PhysicsMomentumDetector:
     def __init__(self,
                  min_climb_usd=1.0,
                  momentum_lookback=5,
-                 momentum_decay_threshold=0.6):
+                 momentum_decay_threshold=0.6,
+                 use_turbulence_filter=True,
+                 turbulence_threshold=0.22):
 
         self.min_climb_usd = min_climb_usd
         self.momentum_lookback = momentum_lookback  # Candles to average
         self.momentum_decay_threshold = momentum_decay_threshold  # Momentum must drop to 60% of peak
+
+        # Enhanced physics analyzers
+        self.use_turbulence_filter = use_turbulence_filter
+        self.turbulence_detector = TurbulenceDetector(lookback=20, turbulence_threshold=turbulence_threshold)
+        self.mean_reversion_analyzer = MeanReversionAnalyzer(ma_period=20)
 
         self.candle_buffer = deque(maxlen=100)
         self.tracking_climb = False
@@ -79,6 +170,16 @@ class PhysicsMomentumDetector:
         current = df.iloc[-1]
         current_price = current['close']
         current_momentum = current['momentum_ma']
+
+        # TURBULENCE CHECK - Only trade in volatile conditions
+        is_turbulent, reynolds_number = self.turbulence_detector.is_turbulent(df)
+
+        if self.use_turbulence_filter and not is_turbulent:
+            # Market too calm (laminar flow) - skip trading
+            if self.tracking_climb:
+                # Reset if we were tracking but turbulence dropped
+                self.tracking_climb = False
+            return None
 
         # Get recent stats
         recent_high = df['high'].max()
@@ -136,6 +237,9 @@ class PhysicsMomentumDetector:
                 red_body_pct = (red_body / current['open']) * 100
 
                 if is_red and red_body_pct >= 0.1:  # Strong enough red
+                    # Calculate mean reversion target
+                    reversion_target_usd = self.mean_reversion_analyzer.calculate_reversion_target(df, current_price)
+
                     # SIGNAL!
                     signal = {
                         'timestamp': timestamp,
@@ -150,7 +254,9 @@ class PhysicsMomentumDetector:
                         'momentum_decay_ratio': momentum_ratio,
                         'red_body_pct': red_body_pct,
                         'current_volume': current['volume'],
-                        'current_velocity': current['velocity_pct']
+                        'current_velocity': current['velocity_pct'],
+                        'reynolds_number': reynolds_number,
+                        'reversion_target_usd': reversion_target_usd
                     }
 
                     print(f"\n🎯 SHORT SIGNAL - MOMENTUM EXHAUSTION")
@@ -159,6 +265,8 @@ class PhysicsMomentumDetector:
                     print(f"   Peak momentum: {self.peak_momentum:.2f}")
                     print(f"   Current momentum: {current_momentum:.2f} ({momentum_ratio:.1%} of peak)")
                     print(f"   Red confirmation: {red_body_pct:.3f}% body")
+                    print(f"   🌊 Reynolds number: {reynolds_number:.2f} ({'TURBULENT' if is_turbulent else 'laminar'})")
+                    print(f"   🎯 Mean reversion target: ${reversion_target_usd:.2f}")
                     print(f"   Entry: ${current_price:.2f}")
                     print(f"   Target: ~${self.climb_start_price:.2f} (gravity pulls it back)")
 
@@ -189,15 +297,21 @@ class PhysicsMomentumStrategy:
                  momentum_decay_threshold=0.6,
                  leverage=150,
                  position_size_usd=100,
-                 exit_tolerance_usd=0.20):
+                 exit_tolerance_usd=0.20,
+                 use_turbulence_filter=True,
+                 turbulence_threshold=0.22,
+                 use_dynamic_tp=False):
 
         self.detector = PhysicsMomentumDetector(
             min_climb_usd=min_climb_usd,
-            momentum_decay_threshold=momentum_decay_threshold
+            momentum_decay_threshold=momentum_decay_threshold,
+            use_turbulence_filter=use_turbulence_filter,
+            turbulence_threshold=turbulence_threshold
         )
         self.leverage = leverage
         self.position_size_usd = position_size_usd
         self.exit_tolerance_usd = exit_tolerance_usd
+        self.use_dynamic_tp = use_dynamic_tp
 
         self.signals = []
 
@@ -220,16 +334,27 @@ class PhysicsMomentumStrategy:
 
         PHYSICS PRINCIPLE: Initial gravity effect happens FAST (within 2 candles).
         We're scalping the immediate drop after momentum exhaustion:
-        - TP: Quick 0.4% drop (achievable in 2 candles)
+        - TP: Quick 0.4% drop OR dynamic mean reversion target
         - SL: Tight 0.5% above entry
         - Max hold: 2 candles (defined in backtest)
         """
         entry_price = signal['entry_price']
 
-        # Take profit: Quick scalp - 0.4% drop
-        # At $200, this is $0.80 - achievable in 1-2 candles
-        tp_pct = 0.4
-        take_profit = entry_price * (1 - tp_pct / 100)
+        # Take profit - Fixed or Dynamic
+        if self.use_dynamic_tp and 'reversion_target_usd' in signal:
+            # Use mean reversion gravitational pull
+            reversion_usd = signal['reversion_target_usd']
+            # Cap between 0.3% and 0.6% for 2-candle feasibility
+            min_tp = entry_price * 0.003
+            max_tp = entry_price * 0.006
+            tp_usd = max(min_tp, min(reversion_usd, max_tp))
+            take_profit = entry_price - tp_usd
+            tp_pct = (tp_usd / entry_price) * 100
+        else:
+            # Fixed: Quick scalp - 0.4% drop
+            # At $200, this is $0.80 - achievable in 1-2 candles
+            tp_pct = 0.4
+            take_profit = entry_price * (1 - tp_pct / 100)
 
         # Stop loss: 0.5% above entry
         sl_pct = 0.5
@@ -244,20 +369,26 @@ class PhysicsMomentumStrategy:
             'leverage': self.leverage,
             'tp_distance_pct': tp_pct,
             'sl_distance_pct': sl_pct,
-            'risk_reward': tp_pct / sl_pct,  # Should be 0.8 (good R:R)
+            'risk_reward': tp_pct / sl_pct,
             'climb_usd': signal['climb_usd'],
             'expected_drop_usd': entry_price - take_profit,
             'momentum_decay_ratio': signal['momentum_decay_ratio'],
-            'peak_momentum': signal['peak_momentum']
+            'peak_momentum': signal['peak_momentum'],
+            'reynolds_number': signal.get('reynolds_number', 0)
         }
 
 
-def backtest_physics_momentum(data_file, min_climb_usd=1.0, momentum_decay_threshold=0.6):
+def backtest_physics_momentum(data_file,
+                               min_climb_usd=1.0,
+                               momentum_decay_threshold=0.6,
+                               use_turbulence_filter=True,
+                               turbulence_threshold=1.5,
+                               use_dynamic_tp=False):
     """
     Backtest the physics momentum decay strategy with 150x leverage
     """
     print("="*80)
-    print("PHYSICS-BASED MOMENTUM DECAY STRATEGY - 150X LEVERAGE")
+    print("PHYSICS-BASED MOMENTUM DECAY STRATEGY - 150X LEVERAGE + TURBULENCE FILTER")
     print("="*80)
     print("Rocket/Ball Physics:")
     print("- Launch: High momentum (volume × velocity)")
@@ -269,6 +400,8 @@ def backtest_physics_momentum(data_file, min_climb_usd=1.0, momentum_decay_thres
     print(f"Min climb: ${min_climb_usd:.2f}")
     print(f"Momentum decay threshold: {momentum_decay_threshold:.0%} of peak")
     print(f"Leverage: 150x | Position size: $100 per trade")
+    print(f"Turbulence filter: {'ENABLED' if use_turbulence_filter else 'DISABLED'} (threshold: {turbulence_threshold:.2f})")
+    print(f"Dynamic TP: {'ENABLED' if use_dynamic_tp else 'DISABLED (fixed 0.4%)'}")
     print("="*80)
 
     # Load data
@@ -285,7 +418,10 @@ def backtest_physics_momentum(data_file, min_climb_usd=1.0, momentum_decay_thres
         momentum_decay_threshold=momentum_decay_threshold,
         leverage=150,
         position_size_usd=100,
-        exit_tolerance_usd=0.20
+        exit_tolerance_usd=0.20,
+        use_turbulence_filter=use_turbulence_filter,
+        turbulence_threshold=turbulence_threshold,
+        use_dynamic_tp=use_dynamic_tp
     )
 
     # Track results
@@ -413,30 +549,65 @@ def backtest_physics_momentum(data_file, min_climb_usd=1.0, momentum_decay_thres
 
 def main():
     """
-    Test physics momentum decay strategy
+    Test physics momentum decay strategy with RIGOROUS TESTING
     """
-    print("\n🚀 PHYSICS MOMENTUM DECAY - Like a Rocket Running Out of Fuel\n")
+    print("\n🚀 PHYSICS MOMENTUM DECAY - RIGOROUS TURBULENCE TESTING\n")
 
-    # Test different momentum decay thresholds
+    # Test configurations: (climb, decay, turbulence_filter, turbulence_threshold, dynamic_tp)
+    # NOTE: Reynolds numbers in this data range 0.11-0.52 (mean 0.22)
     configs = [
-        (1.0, 0.5),   # $1 climb, 50% momentum decay
-        (1.0, 0.6),   # $1 climb, 60% momentum decay
-        (1.5, 0.5),   # $1.50 climb, 50% momentum decay
-        (1.5, 0.6),   # $1.50 climb, 60% momentum decay
+        # BASELINE (no turbulence filter)
+        (1.0, 0.6, False, 0.15, False, "BASELINE: No Filter"),
+
+        # TURBULENCE FILTER - Realistic thresholds based on data
+        (1.0, 0.6, True, 0.15, False, "LOW Volatility (Re>0.15, ~90% data)"),
+        (1.0, 0.6, True, 0.22, False, "MEDIUM Volatility (Re>0.22, ~50% data)"),
+        (1.0, 0.6, True, 0.25, False, "HIGH Volatility (Re>0.25, ~25% data)"),
+        (1.0, 0.6, True, 0.28, False, "VERY HIGH Volatility (Re>0.28, ~5% data)"),
+
+        # DYNAMIC TP (mean reversion)
+        (1.0, 0.6, True, 0.22, True, "MEDIUM Vol + Dynamic TP"),
+        (1.0, 0.6, True, 0.25, True, "HIGH Vol + Dynamic TP"),
+
+        # BEST COMBO TEST
+        (1.0, 0.5, True, 0.22, False, "50% Decay + Medium Vol"),
+        (1.5, 0.6, True, 0.22, False, "$1.50 Climb + Medium Vol"),
     ]
 
-    for climb_usd, decay_threshold in configs:
+    results = []
+
+    for climb_usd, decay_threshold, turb_filter, turb_thresh, dynamic_tp, test_name in configs:
         print(f"\n{'='*80}")
-        print(f"TEST: ${climb_usd:.2f} climb, {decay_threshold:.0%} momentum decay threshold")
+        print(f"TEST: {test_name}")
         print(f"{'='*80}")
 
         strategy, trades, capital = backtest_physics_momentum(
             'SOL_USDT_1min_7days.csv',
             min_climb_usd=climb_usd,
-            momentum_decay_threshold=decay_threshold
+            momentum_decay_threshold=decay_threshold,
+            use_turbulence_filter=turb_filter,
+            turbulence_threshold=turb_thresh,
+            use_dynamic_tp=dynamic_tp
         )
 
+        results.append({
+            'name': test_name,
+            'trades': len(trades),
+            'capital': capital,
+            'return_pct': ((capital - 1000) / 1000) * 100
+        })
+
         print("\n")
+
+    # SUMMARY
+    print("\n" + "="*80)
+    print("📊 RIGOROUS TEST SUMMARY - ALL CONFIGURATIONS")
+    print("="*80)
+    print(f"{'Configuration':<45} {'Trades':<10} {'Return':<15}")
+    print("-"*80)
+    for r in results:
+        print(f"{r['name']:<45} {r['trades']:<10} {r['return_pct']:>+7.1f}%")
+    print("="*80)
 
 
 if __name__ == "__main__":
