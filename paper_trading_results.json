@@ -1,0 +1,18 @@
+{
+  "initial_capital": 10000,
+  "current_capital": 9143.331799393052,
+  "total_return_pct": -8.566682006069477,
+  "total_return_usd": -856.6682006069477,
+  "total_trades": 237,
+  "winning_trades": 128,
+  "losing_trades": 109,
+  "win_rate": 0.540084388185654,
+  "profit_factor": 0.9096971177693457,
+  "total_profit": 8629.941522644507,
+  "total_loss": 9486.609723251464,
+  "avg_win": 67.42141814566021,
+  "avg_loss": 87.03311672707765,
+  "max_drawdown": 17.786150989765964,
+  "current_drawdown": 11.812020028028325,
+  "active_positions": 1
+}

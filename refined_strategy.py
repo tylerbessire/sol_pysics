@@ -334,7 +334,7 @@ class RefinedBacktester:
         }
 
 
-def main():
+def main(data_file='SOL_USDT_1min_24h_realistic.csv'):
     """
     Test refined strategy on 1-minute data
     """
@@ -343,7 +343,7 @@ def main():
     print("="*80)
 
     # Load data
-    df = pd.read_csv('SOL_USDT_1min_24h_realistic.csv')
+    df = pd.read_csv(data_file)
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     df.set_index('timestamp', inplace=True)
 
@@ -417,4 +417,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    data_file = sys.argv[1] if len(sys.argv) > 1 else 'SOL_USDT_1min_24h_realistic.csv'
+    main(data_file)
