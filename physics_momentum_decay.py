@@ -187,7 +187,8 @@ class PhysicsMomentumStrategy:
     def __init__(self,
                  min_climb_usd=1.0,
                  momentum_decay_threshold=0.6,
-                 leverage=50,
+                 leverage=150,
+                 position_size_usd=100,
                  exit_tolerance_usd=0.20):
 
         self.detector = PhysicsMomentumDetector(
@@ -195,6 +196,7 @@ class PhysicsMomentumStrategy:
             momentum_decay_threshold=momentum_decay_threshold
         )
         self.leverage = leverage
+        self.position_size_usd = position_size_usd
         self.exit_tolerance_usd = exit_tolerance_usd
 
         self.signals = []
@@ -252,10 +254,10 @@ class PhysicsMomentumStrategy:
 
 def backtest_physics_momentum(data_file, min_climb_usd=1.0, momentum_decay_threshold=0.6):
     """
-    Backtest the physics momentum decay strategy
+    Backtest the physics momentum decay strategy with 150x leverage
     """
     print("="*80)
-    print("PHYSICS-BASED MOMENTUM DECAY STRATEGY")
+    print("PHYSICS-BASED MOMENTUM DECAY STRATEGY - 150X LEVERAGE")
     print("="*80)
     print("Rocket/Ball Physics:")
     print("- Launch: High momentum (volume × velocity)")
@@ -266,6 +268,7 @@ def backtest_physics_momentum(data_file, min_climb_usd=1.0, momentum_decay_thres
     print("="*80)
     print(f"Min climb: ${min_climb_usd:.2f}")
     print(f"Momentum decay threshold: {momentum_decay_threshold:.0%} of peak")
+    print(f"Leverage: 150x | Position size: $100 per trade")
     print("="*80)
 
     # Load data
@@ -276,11 +279,12 @@ def backtest_physics_momentum(data_file, min_climb_usd=1.0, momentum_decay_thres
     days = (df['timestamp'].iloc[-1] - df['timestamp'].iloc[0]).days
     print(f"Days: {days}")
 
-    # Initialize strategy
+    # Initialize strategy with 150x leverage and $100 bets
     strategy = PhysicsMomentumStrategy(
         min_climb_usd=min_climb_usd,
         momentum_decay_threshold=momentum_decay_threshold,
-        leverage=50,
+        leverage=150,
+        position_size_usd=100,
         exit_tolerance_usd=0.20
     )
 
@@ -290,7 +294,10 @@ def backtest_physics_momentum(data_file, min_climb_usd=1.0, momentum_decay_thres
     initial_capital = 1000
     active_position = None
     candles_in_trade = 0
+    position_size = strategy.position_size_usd
 
+    print(f"\n💰 Position sizing: ${position_size:.2f} per trade")
+    print(f"⚡ Leverage: {strategy.leverage}x")
     print("\nProcessing candles...\n")
 
     for idx, row in df.iterrows():
@@ -301,12 +308,12 @@ def backtest_physics_momentum(data_file, min_climb_usd=1.0, momentum_decay_thres
             # Check TP
             if row['low'] <= active_position['take_profit']:
                 pnl_pct = active_position['tp_distance_pct'] * strategy.leverage
-                pnl_usd = capital * (pnl_pct / 100) * 0.92
+                pnl_usd = position_size * (pnl_pct / 100) * 0.92  # Fixed $100 bet
                 capital += pnl_usd
 
                 print(f"\n✅ TAKE PROFIT at {row['timestamp']} (after {candles_in_trade} candles)")
                 print(f"   Gravity worked! Dropped ${active_position['expected_drop_usd']:.2f}")
-                print(f"   P&L: +{pnl_pct:.1f}% (${pnl_usd:.2f})")
+                print(f"   P&L: +{pnl_pct:.1f}% on ${position_size} bet = ${pnl_usd:.2f}")
                 print(f"   Capital: ${capital:.2f}")
 
                 trades.append({'result': 'win', 'pnl_pct': pnl_pct, 'pnl_usd': pnl_usd})
@@ -316,12 +323,12 @@ def backtest_physics_momentum(data_file, min_climb_usd=1.0, momentum_decay_thres
             # Check SL
             elif row['high'] >= active_position['stop_loss']:
                 pnl_pct = -active_position['sl_distance_pct'] * strategy.leverage
-                pnl_usd = capital * (pnl_pct / 100) * 0.92
+                pnl_usd = position_size * (pnl_pct / 100) * 0.92  # Fixed $100 bet
                 capital += pnl_usd
 
                 print(f"\n❌ STOP LOSS at {row['timestamp']} (after {candles_in_trade} candles)")
                 print(f"   Momentum recovered - escaped gravity")
-                print(f"   P&L: {pnl_pct:.1f}% (${pnl_usd:.2f})")
+                print(f"   P&L: {pnl_pct:.1f}% on ${position_size} bet = ${pnl_usd:.2f}")
                 print(f"   Capital: ${capital:.2f}")
 
                 trades.append({'result': 'loss', 'pnl_pct': pnl_pct, 'pnl_usd': pnl_usd})
@@ -333,7 +340,7 @@ def backtest_physics_momentum(data_file, min_climb_usd=1.0, momentum_decay_thres
                 current_price = row['close']
                 pnl_raw = (active_position['entry_price'] - current_price) / active_position['entry_price'] * 100
                 pnl_pct = pnl_raw * strategy.leverage
-                pnl_usd = capital * (pnl_pct / 100) * 0.92
+                pnl_usd = position_size * (pnl_pct / 100) * 0.92  # Fixed $100 bet
                 capital += pnl_usd
 
                 result = 'win' if pnl_pct > 0 else 'loss'
@@ -342,7 +349,7 @@ def backtest_physics_momentum(data_file, min_climb_usd=1.0, momentum_decay_thres
                 print(f"\n⏱️ TIMEOUT at {row['timestamp']} (after 2 candles)")
                 print(f"   Gravity too slow - exiting")
                 print(f"   Exit: ${current_price:.2f}")
-                print(f"   P&L: {pnl_pct:+.1f}% (${pnl_usd:.2f})")
+                print(f"   P&L: {pnl_pct:+.1f}% on ${position_size} bet = ${pnl_usd:.2f}")
                 print(f"   Capital: ${capital:.2f}")
 
                 trades.append({'result': result, 'pnl_pct': pnl_pct, 'pnl_usd': pnl_usd})
