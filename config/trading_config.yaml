@@ -1,0 +1,70 @@
+# Perfect Timing Analysis - Trading Configuration
+
+# Trading Parameters
+trading:
+  leverage: 500  # Maximum leverage (use with extreme caution)
+  take_profit_pct: 0.2  # 0.2% take profit target
+  stop_loss_pct: 0.15  # 0.15% stop loss
+  position_size_pct: 10  # Percentage of capital per trade
+  max_open_trades: 1  # Maximum simultaneous open trades
+
+# Exchange Configuration
+exchange:
+  name: "binance"  # Exchange name (binance, bybit, etc.)
+  testnet: true  # Use testnet for testing
+  # API credentials should be in separate credentials.yaml file (gitignored)
+
+# Asset Configuration
+assets:
+  primary: "SOL/USDT"  # Primary trading pair
+  alternatives:
+    - "BTC/USDT"
+    - "ETH/USDT"
+  timeframe: "1m"  # 1-minute candles
+
+# Physics Model Parameters
+physics:
+  momentum:
+    window: 20  # Window for momentum calculation
+    exhaustion_threshold: 0.8  # Momentum exhaustion threshold (0-1)
+
+  mean_reversion:
+    window: 20  # Lookback window
+    num_std: 2.0  # Number of standard deviations for Bollinger Bands
+    min_zscore: 2.0  # Minimum Z-score to trigger signal
+
+  terminal_velocity:
+    velocity_window: 5
+    acceleration_threshold: -0.5  # Negative acceleration threshold
+    momentum_decay_threshold: 0.8  # Momentum decay from peak
+
+# Liquidation Detection
+liquidation:
+  volume_spike_threshold: 2.0  # Volume multiple to detect cascade
+  cascade_timeout: 300  # Seconds before considering cascade complete
+  min_cascade_size: 5  # Minimum liquidations to count as cascade
+
+# Risk Management
+risk:
+  max_daily_loss_pct: 5.0  # Maximum daily loss (circuit breaker)
+  max_drawdown_pct: 15.0  # Maximum drawdown before stopping
+  min_win_rate: 0.4  # Minimum win rate to continue trading
+  profit_target_daily_pct: 2.0  # Daily profit target
+
+# Backtesting
+backtest:
+  initial_capital: 1000  # Starting capital for backtests
+  commission_pct: 0.04  # Commission per trade (0.04%)
+  slippage_pct: 0.02  # Slippage estimation
+
+# Dashboard
+dashboard:
+  update_interval: 1  # Seconds between updates
+  port: 8050
+  host: "0.0.0.0"
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "logs/trading.log"
+  console: true
