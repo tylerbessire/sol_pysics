@@ -20,10 +20,11 @@ class ClimbEpisodeDetector:
     Detect complete climb episodes: big spike → climb → significant retracement
     """
 
-    def __init__(self, min_spike_pct=1.0, min_total_climb_pct=1.5, min_retracement_pct=30):
+    def __init__(self, min_spike_pct=1.0, min_total_climb_pct=1.5, min_retracement_pct=30, max_duration_minutes=30):
         self.min_spike_pct = min_spike_pct
         self.min_total_climb_pct = min_total_climb_pct
         self.min_retracement_pct = min_retracement_pct
+        self.max_duration_minutes = max_duration_minutes  # Only fast moves!
 
     def find_all_episodes(self, df):
         """
@@ -75,10 +76,14 @@ class ClimbEpisodeDetector:
                 red_body = abs(df.iloc[idx]['open'] - current_price)
                 red_body_pct = (red_body / df.iloc[idx]['open']) * 100
 
+                # Calculate duration so far
+                duration_minutes = (df.iloc[idx]['timestamp'] - df.iloc[climb_start_idx]['timestamp']).total_seconds() / 60
+
                 if (retracement_pct >= self.min_retracement_pct and
                     is_red and
                     red_body_pct >= 0.2 and
-                    total_climb_pct >= self.min_total_climb_pct):
+                    total_climb_pct >= self.min_total_climb_pct and
+                    duration_minutes <= self.max_duration_minutes):  # FAST moves only!
 
                     # CLIMB ENDED!
                     climb_end_idx = idx
@@ -296,11 +301,12 @@ def main():
     print(f"Period: {df['timestamp'].iloc[0]} to {df['timestamp'].iloc[-1]}")
     print()
 
-    # Step 1: Find all episodes
+    # Step 1: Find all episodes (ULTRA-FAST LIQUIDATION CASCADES)
     detector = ClimbEpisodeDetector(
-        min_spike_pct=1.0,          # Initial spike ≥1%
-        min_total_climb_pct=1.5,    # Total climb ≥1.5%
-        min_retracement_pct=30       # End when ≥30% retrace
+        min_spike_pct=0.75,         # Initial spike ≥0.75%
+        min_total_climb_pct=1.0,    # Total climb ≥1.0%
+        min_retracement_pct=20,      # End when ≥20% retrace
+        max_duration_minutes=10      # Complete in ≤10 minutes (ULTRA-FAST!)
     )
 
     episodes = detector.find_all_episodes(df)
